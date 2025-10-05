@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson } from 'lucide-react';
+import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson, PlusSquare, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import UploadStep from './steps/UploadStep';
 import { Viewer } from './Viewer';
-import { SceneData, BuildingData } from '../types/building';
+import { SceneData, BuildingData, SceneObject } from '../types/building';
 import { convertBuildingToScene } from '../services/buildingConverter';
 import { db } from '../config/firebase';
 import { ref, set, push, onValue, remove } from 'firebase/database';
@@ -20,18 +20,64 @@ interface UserFile {
 export default function Workspace() {
   const { user, logout } = useAuth();
   const [currentStep, setCurrentStep] = useState<Step>('upload');
-  const [sceneData, setSceneData] = useState<SceneData | null>(null);
-  const [buildingData, setBuildingData] = useState<BuildingData | null>(null);
+  const [sceneData, setSceneData] = useState<SceneData>({ objects: [] });
+  const [buildingData, setBuildingData] = useState<BuildingData | null>(null); // Represents the LAST loaded building
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Ref for hidden file input
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
+  // State for placement mode
+  const [placementModeData, setPlacementModeData] = useState<SceneData | null>(null);
+
+  // State for multi-model logic
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   // State for Firebase interaction
   const [fileName, setFileName] = useState('');
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+
+  // --- Core Scene & Model Logic ---
+
+  const clearScene = () => {
+    setSceneData({ objects: [] });
+    setBuildingData(null);
+    setError(null);
+  };
+
+  const addModelToScene = (data: BuildingData, position?: [number, number, number]) => {
+    try {
+      const scene = convertBuildingToScene(data);
+      const offset = position || [0, 0, 0];
+
+      const offsetSceneObjects = scene.objects.map(obj => ({
+        ...obj,
+        position: [obj.position[0] + offset[0], obj.position[1] + offset[1], obj.position[2] + offset[2]] as [number, number, number],
+      }));
+
+      setSceneData(prev => ({ objects: [...prev.objects, ...offsetSceneObjects] }));
+      setBuildingData(data); // Keep track of the latest loaded model for saving/downloading
+      setCurrentStep('visualization');
+    } catch (err) {
+      console.error("Error converting building to scene:", err);
+      setError("No se pudo procesar el modelo para la visualización.");
+    }
+  };
+
+  const handlePlaceModel = (position: [number, number, number]) => {
+    if (!placementModeData) return;
+
+    const offsetSceneObjects = placementModeData.objects.map(obj => ({
+      ...obj,
+      position: [obj.position[0] + position[0], obj.position[1] + position[1], obj.position[2] + position[2]] as [number, number, number],
+    }));
+
+    setSceneData(prev => ({ objects: [...prev.objects, ...offsetSceneObjects] }));
+    setPlacementModeData(null); // Exit placement mode
+  };
+
 
   // --- Firebase Logic ---
 
@@ -55,7 +101,7 @@ export default function Workspace() {
 
   const handleSaveToFirebase = async () => {
     if (!user || !buildingData) {
-      setError("No hay datos para guardar o no has iniciado sesión.");
+      setError("No hay datos del último modelo para guardar o no has iniciado sesión.");
       return;
     }
     if (!fileName.trim()) {
@@ -81,17 +127,12 @@ export default function Workspace() {
   };
 
   const handleLoadFromFirebase = (file: UserFile) => {
-    try {
-      setBuildingData(file.buildingData);
-      const scene = convertBuildingToScene(file.buildingData);
-      setSceneData(scene);
-      setCurrentStep('visualization');
-      setShowFileBrowser(false);
-      setError(null);
-    } catch (err) {
-      console.error("Error cargando archivo:", err);
-      setError("No se pudo cargar la escena desde este archivo.");
-    }
+    // Enter placement mode with the selected model's data
+    const scene = convertBuildingToScene(file.buildingData);
+    setPlacementModeData(scene);
+    setBuildingData(file.buildingData); // Also set as last loaded model
+    setIsModalOpen(false);
+    setCurrentStep('visualization');
   };
 
   const handleDeleteFromFirebase = async (fileId: string) => {
@@ -106,12 +147,7 @@ export default function Workspace() {
     }
   };
 
-  // --- Original & New Logic ---
-
-  const steps = [
-    { id: 'upload' as Step, label: 'Cargar', icon: Upload },
-    { id: 'visualization' as Step, label: 'Visualizar', icon: Eye },
-  ];
+  // --- Step 1 Handlers ---
 
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
@@ -123,10 +159,8 @@ export default function Workspace() {
       if (!validateBuildingData(data)) {
         throw new Error('Los datos extraídos del PDF no tienen el formato correcto');
       }
-      setBuildingData(data);
-      const scene = convertBuildingToScene(data);
-      setSceneData(scene);
-      setCurrentStep('visualization');
+      clearScene();
+      addModelToScene(data);
     } catch (err) {
       console.error('Error procesando archivo:', err);
       setError(err instanceof Error ? err.message : 'Error al procesar el archivo');
@@ -138,32 +172,24 @@ export default function Workspace() {
   const handleJsonUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     setIsLoading(true);
     setError(null);
     setShowFileBrowser(false);
-
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-
       const { validateBuildingData } = await import('../services/pdfProcessor');
       if (!validateBuildingData(data)) {
         throw new Error('El archivo JSON no tiene el formato de BuildingData correcto.');
       }
-
-      setBuildingData(data);
-      const scene = convertBuildingToScene(data);
-      setSceneData(scene);
-      setCurrentStep('visualization');
+      clearScene();
+      addModelToScene(data);
     } catch (err) {
       console.error('Error cargando archivo JSON:', err);
       setError(err instanceof Error ? err.message : 'Error al cargar el archivo JSON.');
     } finally {
       setIsLoading(false);
     }
-
-    // Reset file input
     event.target.value = '';
   };
 
@@ -172,20 +198,19 @@ export default function Workspace() {
     try {
       const { createSampleBuildingData } = await import('../services/buildingConverter');
       const sampleData = createSampleBuildingData();
-      const scene = convertBuildingToScene(sampleData);
-      setSceneData(scene);
-      setCurrentStep('visualization');
+      clearScene();
+      addModelToScene(sampleData);
     } catch (err) {
       console.error('Error cargando datos de ejemplo:', err);
       setError('Error al cargar datos de ejemplo');
     }
   };
 
-  const handleBackToUpload = () => {
-    setSceneData(null);
-    setBuildingData(null);
+  // --- Navigation & UI Handlers ---
+
+  const handleGoToUploadStep = () => {
+    clearScene();
     setCurrentStep('upload');
-    setError(null);
     setShowFileBrowser(false);
   };
 
@@ -203,13 +228,20 @@ export default function Workspace() {
     URL.revokeObjectURL(url);
   };
 
+  // --- Components ---
+
+  const steps = [
+    { id: 'upload' as Step, label: 'Cargar', icon: Upload },
+    { id: 'visualization' as Step, label: 'Visualizar', icon: Eye },
+  ];
+
   const FileBrowser = () => (
-    <div className="border-t border-slate-200 mt-8 pt-8">
+    <div className="bg-slate-100 p-4 rounded-lg">
       <h3 className="text-lg font-medium text-slate-700 mb-4">Archivos Guardados</h3>
       {userFiles.length > 0 ? (
         <ul className="space-y-2 max-h-60 overflow-y-auto">
           {userFiles.map(file => (
-            <li key={file.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+            <li key={file.id} className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm">
               <div>
                 <p className="font-medium text-slate-800">{file.fileName}</p>
                 <p className="text-xs text-slate-500">
@@ -219,10 +251,10 @@ export default function Workspace() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => handleLoadFromFirebase(file)}
-                  className="p-2 text-slate-600 hover:text-blue-600 transition-colors"
-                  title="Cargar archivo"
+                  className="p-2 text-slate-600 hover:text-green-600 transition-colors"
+                  title="Añadir a la Escena"
                 >
-                  <FolderOpen size={18} />
+                  <PlusSquare size={18} />
                 </button>
                 <button
                   onClick={() => handleDeleteFromFirebase(file.id)}
@@ -241,18 +273,21 @@ export default function Workspace() {
     </div>
   );
 
+  const Modal = ({ children }: { children: React.ReactNode }) => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full relative">
+        <button onClick={() => setIsModalOpen(false)} className="absolute top-4 right-4 text-slate-500 hover:text-slate-800">
+          <X size={24} />
+        </button>
+        {children}
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-light text-slate-800">Diseño Arquitectónico</h1>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-slate-600">{user?.email}</span>
-            <button onClick={logout} className="text-slate-600 hover:text-slate-800 transition-colors">
-              <LogOut size={20} />
-            </button>
-          </div>
-        </div>
+        {/* ... Header ... */}
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
@@ -265,8 +300,8 @@ export default function Workspace() {
             return (
               <div key={step.id} className="flex items-center gap-8">
                 <button
-                  onClick={() => !sceneData && !isLoading && setCurrentStep(step.id)}
-                  disabled={!!sceneData || isLoading}
+                  onClick={() => currentStep === 'visualization' && handleGoToUploadStep()}
+                  disabled={isLoading}
                   className={`flex items-center gap-3 transition-all ${
                     isActive
                       ? 'text-slate-800'
@@ -362,20 +397,27 @@ export default function Workspace() {
             </>
           )}
 
-          {currentStep === 'visualization' && sceneData && (
+          {currentStep === 'visualization' && (
             <div>
               <div className="flex flex-wrap gap-4 mb-4 items-center">
                 <button
-                  onClick={handleBackToUpload}
+                  onClick={handleGoToUploadStep}
                   className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium py-2 px-4 rounded-lg transition-colors"
                 >
-                  Cargar otro archivo
+                  Limpiar y Cargar Nuevo
+                </button>
+                <button
+                  onClick={() => setIsModalOpen(true)}
+                  className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  <PlusSquare size={18} className="inline-block mr-2" />
+                  Añadir desde Nube
                 </button>
                 <button
                   onClick={handleDownloadJSON}
                   className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                 >
-                  📥 Descargar JSON
+                  📥 Descargar JSON (Último)
                 </button>
                 <div className="flex-grow"></div>
                 <div className="flex items-center gap-2">
@@ -388,21 +430,37 @@ export default function Workspace() {
                   />
                   <button
                     onClick={handleSaveToFirebase}
-                    disabled={isLoading}
+                    disabled={isLoading || !buildingData}
                     className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-green-300"
                   >
                     <Save size={18} />
-                    {isLoading ? 'Guardando...' : 'Guardar en Nube'}
+                    {isLoading ? 'Guardando...' : 'Guardar Último Modelo'}
                   </button>
                 </div>
               </div>
-              <div className="h-[70vh] w-full bg-slate-100 rounded-lg overflow-hidden">
-                <Viewer data={sceneData} />
+              <div className="h-[70vh] w-full bg-slate-100 rounded-lg overflow-hidden border">
+                {sceneData.objects.length > 0 || placementModeData ? (
+                  <Viewer
+                    data={sceneData}
+                    placementModeData={placementModeData}
+                    onPlaceModel={handlePlaceModel}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-500">
+                    <p>La escena está vacía. Carga un modelo para empezar.</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {isModalOpen && (
+        <Modal>
+          <FileBrowser />
+        </Modal>
+      )}
     </div>
   );
 }

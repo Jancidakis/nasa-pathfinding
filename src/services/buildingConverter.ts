@@ -159,12 +159,11 @@ function convertLevel(level: BuildingLevel, levelIndex: number): SceneObject[] {
       objects.push({
         id: `level-${levelIndex}-area-${areaIndex}-corner-${cornerIndex}`,
         shape: 'cylinder',
-        position: [
-          position[0] + corner[0],
-          levelHeight,
-          position[1] + corner[1],
-        ],
-        size: [markerSize, markerSize, AREA_HEIGHT * 2],
+                  position: [
+                    position[0] + corner[0],
+                    levelHeight + AREA_HEIGHT,
+                    position[1] + corner[1],
+                  ],        size: [markerSize, markerSize, AREA_HEIGHT * 2],
         color,
       });
     });
@@ -261,15 +260,7 @@ function convertLevel(level: BuildingLevel, levelIndex: number): SceneObject[] {
 export function convertBuildingToScene(buildingData: BuildingData): SceneData {
   const objects: SceneObject[] = [];
 
-  // Add a base ground plane for reference
-  objects.push({
-    id: 'ground-plane',
-    shape: 'box',
-    position: [0, -FLOOR_THICKNESS / 2, 0],
-    size: [100, FLOOR_THICKNESS, 100],
-    color: '#1E293B', // dark slate
-    label: 'Ground',
-  });
+
 
   // Convert each building level
   buildingData.buildingLevels.forEach((level, index) => {
@@ -283,7 +274,7 @@ export function convertBuildingToScene(buildingData: BuildingData): SceneData {
     objects.push({
       id: `level-${index}-indicator`,
       shape: 'box',
-      position: [0, levelHeight, 0], // En el origen (0,0,Z)
+      position: [0, levelHeight + indicatorSize / 2 + 0.1, 0], // Elevado para no parpadear
       size: [indicatorSize, indicatorSize, indicatorSize],
       color: '#FBBF24', // Amarillo
       label: `${level.levelName} (${levelHeight.toFixed(2)}m)`,
