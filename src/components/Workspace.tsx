@@ -3,7 +3,7 @@ import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson, Plus
 import { useAuth } from '../contexts/AuthContext';
 import UploadStep from './steps/UploadStep';
 import { Viewer } from './Viewer';
-import { SceneData, BuildingData, SceneObject } from '../types/building';
+import { SceneData, BuildingData, SceneObject, Agent, AgentProfile, DEFAULT_AGENT_PROFILES } from '../types/building';
 import { convertBuildingToScene } from '../services/buildingConverter';
 import { db } from '../config/firebase';
 import { ref, set, push, onValue, remove } from 'firebase/database';
@@ -23,7 +23,7 @@ export interface GeoJsonData {
   features: GeoJsonFeature[];
 }
 
-type Step = 'upload' | 'visualization';
+type Step = 'upload' | 'visualization' | 'simulation';
 
 interface UserFile {
   id: string;
@@ -55,6 +55,11 @@ export default function Workspace() {
   const [fileName, setFileName] = useState('');
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+
+  // State for agents/pathfinding
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<string>('adult-normal');
+  const [isSimulating, setIsSimulating] = useState(false);
 
   // --- Core Scene & Model Logic ---
 
@@ -165,127 +170,142 @@ export default function Workspace() {
     }
   };
 
-  // --- Step 1 Handlers ---
+  // --- Agent/Pathfinding Handlers ---
 
-  const handleTerrainUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const svgText = await file.text();
-
-      // Crear SVG temporalmente en el DOM para que getBBox() funcione
-      const tempDiv = document.createElement('div');
-      tempDiv.style.position = 'absolute';
-      tempDiv.style.visibility = 'hidden';
-      tempDiv.innerHTML = svgText;
-      document.body.appendChild(tempDiv);
-
-      const svgElement = tempDiv.querySelector('svg');
-      if (!svgElement) {
-        document.body.removeChild(tempDiv);
-        throw new Error("No se encontró elemento SVG en el archivo.");
-      }
-
-      const features: GeoJsonFeature[] = [];
-
-      // Parser for polygon points attribute
-      const parsePoints = (pointsAttr: string) => {
-        return pointsAttr.split(' ').map(p => p.split(',').map(Number));
-      };
-
-      // Parser para path usando getBBox del navegador (más robusto)
-      const parsePathToBounds = (pathElement: SVGPathElement): number[][] | null => {
-        try {
-          // Obtener el bounding box del path
-          const bbox = pathElement.getBBox();
-
-          if (isNaN(bbox.x) || isNaN(bbox.y) || isNaN(bbox.width) || isNaN(bbox.height)) {
-            return null;
-          }
-
-          if (bbox.width === 0 || bbox.height === 0) {
-            return null; // Ignorar paths sin área
-          }
-
-          // Crear un rectángulo simplificado del path
-          return [
-            [bbox.x, bbox.y],
-            [bbox.x + bbox.width, bbox.y],
-            [bbox.x + bbox.width, bbox.y + bbox.height],
-            [bbox.x, bbox.y + bbox.height],
-            [bbox.x, bbox.y] // Cerrar
-          ];
-        } catch (err) {
-          console.warn('Error obteniendo bbox de path:', err);
-          return null;
-        }
-      };
-
-      // Parse polygon elements
-      svgElement.querySelectorAll('polygon').forEach((poly, i) => {
-        const points = parsePoints(poly.getAttribute('points') || '');
-        if (points.length > 0) {
-          features.push({
-            type: 'Feature',
-            geometry: { type: 'Polygon', coordinates: [points] },
-            properties: { id: `poly-${i}` }
-          });
-        }
-      });
-
-      // Parse polyline elements
-      svgElement.querySelectorAll('polyline').forEach((line, i) => {
-        const points = parsePoints(line.getAttribute('points') || '');
-        if (points.length > 0) {
-          features.push({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: points },
-            properties: { id: `line-${i}` }
-          });
-        }
-      });
-
-      // Parse path elements usando bounding box (más simple y robusto)
-      svgElement.querySelectorAll('path').forEach((path, i) => {
-        const coords = parsePathToBounds(path as SVGPathElement);
-        if (!coords) return;
-
-        features.push({
-          type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [coords] },
-          properties: { id: `path-${i}` }
-        });
-      });
-
-      // Limpiar el DOM
-      document.body.removeChild(tempDiv);
-
-      if (features.length === 0) {
-        throw new Error("No se encontraron elementos vectoriales (polygon, polyline, path) en el archivo SVG.");
-      }
-
-      const geoJsonData: GeoJsonData = { type: 'FeatureCollection', features };
-      setTerrainData(geoJsonData);
-
-      // Convertir terreno a objetos 3D y añadirlo a la escena
-      const { convertTerrainToScene } = await import('../services/terrainConverter');
-      const terrainScene = convertTerrainToScene(geoJsonData);
-
-      // Añadir terreno a la escena existente (o crear nueva escena)
-      setSceneData(prev => ({ objects: [...prev.objects, ...terrainScene.objects] }));
-      setCurrentStep('visualization');
-
-    } catch (err) {
-      console.error('Error processing SVG file:', err);
-      setError(err instanceof Error ? err.message : 'Error al procesar el archivo SVG.');
-    } finally {
-      setIsLoading(false);
+  const handleAddAgent = async () => {
+    if (!sceneData) {
+      setError('Primero carga un edificio para poder añadir personas.');
+      return;
     }
 
+    // Find a random floor area from the scene objects
+    const floorAreas = sceneData.objects.filter(
+      obj => obj.shape === 'box' && obj.id.includes('-area-')
+    );
+
+    if (floorAreas.length === 0) {
+      setError('No se encontraron áreas de piso válidas en la escena para añadir agentes.');
+      return;
+    }
+
+    const randomAreaObject = floorAreas[Math.floor(Math.random() * floorAreas.length)];
+    const { position, size } = randomAreaObject;
+
+    // The size array is [width, height, depth] for a box
+    const width = size[0];
+    const depth = size[2]!;
+
+    // Generate a random point within this area's box, with a small margin
+    const margin = 0.5; // Keep agents away from the very edge
+    const randomX = position[0] + (Math.random() - 0.5) * (width - margin);
+    const randomZ = position[2] + (Math.random() - 0.5) * (depth - margin);
+    const y = position[1]; // Y should be on the floor surface
+
+    const agentPosition: [number, number, number] = [randomX, y, randomZ];
+
+    // Extract level index from the object's ID (e.g., "level-1-area-...")
+    const idParts = randomAreaObject.id.split('-');
+    const levelIndex = idParts.length > 1 ? parseInt(idParts[1], 10) : 0;
+
+    if (isNaN(levelIndex)) {
+        setError('No se pudo determinar el nivel para el agente desde el ID del objeto.');
+        return;
+    }
+
+    const newAgent: Agent = {
+      id: `agent-${Date.now()}`,
+      profileId: selectedProfile,
+      position: agentPosition,
+      pathHistory: [agentPosition],
+      levelIndex: levelIndex,
+      isEvacuating: false,
+      evacuated: false,
+    };
+
+    setAgents(prev => [...prev, newAgent]);
+    console.log(`👤 Agente añadido en nivel ${levelIndex} en el área ${randomAreaObject.label}`);
+  };
+
+  const handleStartEvacuation = async () => {
+    if (!buildingData || agents.length === 0) {
+      setError('Necesitas edificio y agentes para iniciar evacuación');
+      return;
+    }
+
+    setIsSimulating(true);
+    const { findNearestExit, calculatePath, buildNavigationGraph } = await import('../services/pathfinding');
+
+    // Build navigation graphs once per level to avoid re-computation for each agent
+    const navGraphs = new Map<number, any>(); // Using 'any' for NavGraph type from pathfinding
+    buildingData.buildingLevels.forEach((_, levelIndex) => {
+      const graph = buildNavigationGraph(buildingData, levelIndex);
+      navGraphs.set(levelIndex, graph);
+    });
+
+    // Calculate paths for all agents using the pre-built graphs
+    const updatedAgents = agents.map(agent => {
+      if (agent.evacuated) return agent;
+
+      const exit = findNearestExit(agent, buildingData);
+      if (!exit) {
+        console.warn(`No exit found for agent ${agent.id} on level ${agent.levelIndex}`);
+        return agent;
+      }
+
+      // Get the correct graph for the agent's level
+      const agentGraph = navGraphs.get(agent.levelIndex);
+      if (!agentGraph) {
+        console.error(`Could not find navigation graph for level ${agent.levelIndex}`);
+        return agent;
+      }
+
+      const path = calculatePath(agent.position, exit, buildingData, agentGraph);
+
+      return {
+        ...agent,
+        isEvacuating: true,
+        targetPosition: exit,
+        path,
+      };
+    });
+
+    setAgents(updatedAgents);
+    console.log(`🚨 Evacuación iniciada para ${updatedAgents.length} agentes`);
+  };
+
+  const handleClearAgents = () => {
+    setAgents([]);
+    setIsSimulating(false);
+  };
+
+  // Animation loop para mover agentes
+  useEffect(() => {
+    if (!isSimulating) return;
+
+    const interval = setInterval(async () => {
+      const { moveAgent } = await import('../services/pathfinding');
+
+      setAgents(prevAgents => {
+        const allEvacuated = prevAgents.every(a => a.evacuated);
+        if (allEvacuated) {
+          setIsSimulating(false);
+          return prevAgents;
+        }
+
+        return prevAgents.map(agent =>
+          moveAgent(agent, 0.05, DEFAULT_AGENT_PROFILES) // 50ms = 0.05 segundos
+        );
+      });
+    }, 50); // 20 FPS
+
+    return () => clearInterval(interval);
+  }, [isSimulating]);
+
+  // --- Step 1 Handlers ---
+
+  // Función eliminada temporalmente - no funcionaba correctamente
+  const handleTerrainUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    setError('Función de terreno SVG deshabilitada temporalmente');
     event.target.value = '';
   };
 
@@ -354,6 +374,14 @@ export default function Workspace() {
     setShowFileBrowser(false);
   };
 
+  const handleStepClick = (stepId: Step) => {
+    if (stepId === 'upload') {
+      handleGoToUploadStep();
+    } else if (buildingData) { // Only move to other steps if data exists
+      setCurrentStep(stepId);
+    }
+  };
+
   const handleDownloadJSON = () => {
     if (!buildingData) return;
     const dataStr = JSON.stringify(buildingData, null, 2);
@@ -373,6 +401,7 @@ export default function Workspace() {
   const steps = [
     { id: 'upload' as Step, label: 'Cargar', icon: Upload },
     { id: 'visualization' as Step, label: 'Visualizar', icon: Eye },
+    { id: 'simulation' as Step, label: 'Simular', icon: TestTube },
   ];
 
   const FileBrowser = () => (
@@ -440,15 +469,15 @@ export default function Workspace() {
             return (
               <div key={step.id} className="flex items-center gap-8">
                 <button
-                  onClick={() => currentStep === 'visualization' && handleGoToUploadStep()}
-                  disabled={isLoading}
+                  onClick={() => handleStepClick(step.id)}
+                  disabled={isLoading || (step.id !== 'upload' && !buildingData)}
                   className={`flex items-center gap-3 transition-all ${
                     isActive
                       ? 'text-slate-800'
                       : isCompleted
                       ? 'text-slate-600 hover:text-slate-800'
                       : 'text-slate-400'
-                  }`}
+                  } ${(step.id !== 'upload' && !buildingData) ? 'cursor-not-allowed' : ''}`}
                 >
                   <div
                     className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
@@ -553,6 +582,38 @@ export default function Workspace() {
 
           {currentStep === 'visualization' && (
             <div>
+              {/* Panel para añadir agentes en visualización */}
+              <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                <h3 className="text-lg font-medium text-blue-900 mb-3">👤 Agregar Personas</h3>
+                <div className="flex flex-wrap gap-3 items-center">
+                  <select
+                    value={selectedProfile}
+                    onChange={(e) => setSelectedProfile(e.target.value)}
+                    className="border border-blue-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {DEFAULT_AGENT_PROFILES.map(profile => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name} ({profile.speed}m/s)
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleAddAgent}
+                    disabled={!buildingData}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-blue-300"
+                  >
+                    ➕ Añadir Persona
+                  </button>
+                  <button
+                    onClick={handleClearAgents}
+                    disabled={agents.length === 0}
+                    className="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-gray-300"
+                  >
+                    🗑️ Limpiar Personas ({agents.length})
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-wrap gap-4 mb-4 items-center">
                 <button
                   onClick={handleGoToUploadStep}
@@ -598,6 +659,123 @@ export default function Workspace() {
                     data={sceneData}
                     placementModeData={placementModeData}
                     onPlaceModel={handlePlaceModel}
+                    agents={agents}
+                    agentProfiles={DEFAULT_AGENT_PROFILES}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-500">
+                    <p>La escena está vacía. Carga un modelo para empezar.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {currentStep === 'simulation' && (
+            <div>
+              {/* Panel de control de simulación */}
+              <div className="mb-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+                <h3 className="text-lg font-medium text-purple-900 mb-3">🚨 Control de Simulación</h3>
+                <div className="flex flex-wrap gap-3 items-center mb-4">
+                  <button
+                    onClick={handleStartEvacuation}
+                    disabled={agents.length === 0 || isSimulating || !buildingData}
+                    className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-red-300"
+                  >
+                    🚨 {isSimulating ? 'Evacuando...' : 'Iniciar Evacuación'}
+                  </button>
+                  <button
+                    onClick={() => setIsSimulating(false)}
+                    disabled={!isSimulating}
+                    className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-orange-300"
+                  >
+                    ⏸ Pausar
+                  </button>
+                  <button
+                    onClick={handleClearAgents}
+                    disabled={agents.length === 0}
+                    className="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-gray-300"
+                  >
+                    🔄 Resetear
+                  </button>
+                </div>
+                {!buildingData && (
+                  <p className="text-sm text-purple-600">⚠️ Primero carga un edificio y añade personas en "Visualizar"</p>
+                )}
+                {agents.length === 0 && buildingData && (
+                  <p className="text-sm text-purple-600">⚠️ Añade personas en el paso "Visualizar" antes de simular</p>
+                )}
+              </div>
+
+              {/* Estadísticas de la simulación */}
+              {agents.length > 0 && (
+                <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Total de agentes */}
+                  <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <h4 className="text-sm font-medium text-blue-900 mb-2">👥 Total de Personas</h4>
+                    <p className="text-3xl font-bold text-blue-700">{agents.length}</p>
+                  </div>
+
+                  {/* Evacuados */}
+                  <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                    <h4 className="text-sm font-medium text-green-900 mb-2">✅ Evacuados</h4>
+                    <p className="text-3xl font-bold text-green-700">
+                      {agents.filter(a => a.evacuated).length}
+                    </p>
+                    <p className="text-sm text-green-600 mt-1">
+                      {agents.length > 0 ? Math.round((agents.filter(a => a.evacuated).length / agents.length) * 100) : 0}% completado
+                    </p>
+                  </div>
+
+                  {/* En evacuación */}
+                  <div className="p-4 bg-orange-50 rounded-lg border border-orange-200">
+                    <h4 className="text-sm font-medium text-orange-900 mb-2">🏃 Evacuando</h4>
+                    <p className="text-3xl font-bold text-orange-700">
+                      {agents.filter(a => a.isEvacuating && !a.evacuated).length}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Filtros por perfil */}
+              {agents.length > 0 && (
+                <div className="mb-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <h4 className="text-sm font-medium text-slate-900 mb-3">📊 Distribución por Perfil</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {DEFAULT_AGENT_PROFILES.map(profile => {
+                      const count = agents.filter(a => a.profileId === profile.id).length;
+                      const evacuated = agents.filter(a => a.profileId === profile.id && a.evacuated).length;
+                      return (
+                        <div key={profile.id} className="p-3 bg-white rounded-lg border" style={{ borderColor: profile.color }}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: profile.color }}></div>
+                            <span className="text-xs font-medium text-slate-700">{profile.name}</span>
+                          </div>
+                          <p className="text-lg font-bold text-slate-900">{count}</p>
+                          <p className="text-xs text-slate-600">
+                            {evacuated}/{count} evacuados
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {currentStep === 'simulation' && (
+            <div>
+
+              {/* Visor 3D */}
+              <div className="relative" style={{ width: '100%', height: '70vh' }}>
+                {sceneData.objects.length > 0 ? (
+                  <Viewer
+                    data={sceneData}
+                    placementModeData={placementModeData}
+                    onPlaceModel={handlePlaceModel}
+                    agents={agents}
+                    agentProfiles={DEFAULT_AGENT_PROFILES}
                   />
                 ) : (
                   <div className="flex items-center justify-center h-full text-slate-500">

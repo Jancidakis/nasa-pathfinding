@@ -89,3 +89,64 @@ export interface SceneObject {
 export interface SceneData {
   objects: SceneObject[];
 }
+
+// Agent (Person) types for pathfinding simulation
+export interface AgentProfile {
+  id: string;
+  name: string;
+  speed: number; // m/s (velocidad de movimiento)
+  color: string; // Color para visualización
+  description?: string;
+}
+
+export interface Agent {
+  id: string;
+  profileId: string;
+  position: [number, number, number]; // Posición actual [x, y, z]
+  targetPosition?: [number, number, number]; // Objetivo
+  path?: [number, number, number][]; // Trayectoria calculada
+  pathHistory: [number, number, number][]; // Historial de posiciones visitadas
+  levelIndex: number; // En qué nivel está
+  isEvacuating: boolean;
+  evacuated: boolean;
+  evacuationTime?: number; // Tiempo en segundos hasta evacuar
+}
+
+// Predefined agent profiles
+export const DEFAULT_AGENT_PROFILES: AgentProfile[] = [
+  {
+    id: 'adult-normal',
+    name: 'Adulto Normal',
+    speed: 1.4, // velocidad promedio de caminata
+    color: '#3B82F6', // azul
+    description: 'Persona adulta sin discapacidades'
+  },
+  {
+    id: 'elderly',
+    name: 'Adulto Mayor',
+    speed: 0.8,
+    color: '#F59E0B', // naranja
+    description: 'Persona de la tercera edad con movilidad reducida'
+  },
+  {
+    id: 'child',
+    name: 'Niño',
+    speed: 1.0,
+    color: '#22C55E', // verde
+    description: 'Niño o adolescente'
+  },
+  {
+    id: 'disabled',
+    name: 'Persona con Discapacidad',
+    speed: 0.5,
+    color: '#EF4444', // rojo
+    description: 'Persona en silla de ruedas o con movilidad muy reducida'
+  },
+  {
+    id: 'athletic',
+    name: 'Atlético',
+    speed: 2.0,
+    color: '#8B5CF6', // púrpura
+    description: 'Persona joven y atlética'
+  }
+];

@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Plane, GizmoHelper, GizmoViewport, Html } from '@react-three/drei';
 import React, { useState } from 'react';
-import { SceneData, SceneObject } from '../types/building';
+import { SceneData, SceneObject, Agent, AgentProfile } from '../types/building';
 import * as THREE from 'three';
 
 // A single, shared material for all ghost objects for performance
@@ -17,6 +17,8 @@ interface ViewerProps {
   data: SceneData;
   placementModeData: SceneData | null;
   onPlaceModel: (position: [number, number, number]) => void;
+  agents?: Agent[];
+  agentProfiles?: AgentProfile[];
 }
 
 // Reusable helper to get the correct geometry for a scene object
@@ -76,6 +78,55 @@ const Object3D = ({ object }: { object: SceneObject }) => {
   );
 };
 
+// Component for rendering a single agent (person)
+const Agent3D = ({ agent, profile }: { agent: Agent; profile?: AgentProfile }) => {
+  const [hovered, setHovered] = useState(false);
+
+  if (!profile) return null;
+
+  const radius = 0.3; // 30cm radius for person representation
+
+  return (
+    <group>
+      <mesh
+        position={agent.position}
+        onPointerOver={() => setHovered(true)}
+        onPointerOut={() => setHovered(false)}
+      >
+        <sphereGeometry args={[radius, 16, 16]} />
+        <meshStandardMaterial
+          color={profile.color}
+          transparent
+          opacity={agent.evacuated ? 0.3 : 0.9}
+          emissive={profile.color}
+          emissiveIntensity={hovered ? 0.5 : (agent.isEvacuating ? 0.3 : 0.1)}
+        />
+      </mesh>
+      {hovered && (
+        <Html position={agent.position} center distanceFactor={10}>
+          <div className="bg-black bg-opacity-75 text-white px-3 py-1 rounded-md text-sm whitespace-nowrap pointer-events-none">
+            {profile.name} {agent.evacuated ? '✅' : agent.isEvacuating ? '🏃' : ''}
+          </div>
+        </Html>
+      )}
+      {/* Render path line if evacuating */}
+      {agent.isEvacuating && agent.path && agent.path.length > 1 && (
+        <line>
+          <bufferGeometry attach="geometry">
+            <bufferAttribute
+              attach="attributes-position"
+              count={agent.path.length}
+              array={new Float32Array(agent.path.flat())}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial attach="material" color={profile.color} linewidth={2} opacity={0.5} transparent />
+        </line>
+      )}
+    </group>
+  );
+};
+
 // Renders the semi-transparent 'ghost' model that follows the cursor
 const GhostModel = ({ scene, position }: { scene: SceneData; position: [number, number, number] }) => {
   return (
@@ -91,7 +142,7 @@ const GhostModel = ({ scene, position }: { scene: SceneData; position: [number, 
 };
 
 // Main Scene Content
-const SceneContent: React.FC<ViewerProps> = ({ data, placementModeData, onPlaceModel }) => {
+const SceneContent: React.FC<ViewerProps> = ({ data, placementModeData, onPlaceModel, agents, agentProfiles }) => {
   const [pointerPosition, setPointerPosition] = useState<[number, number, number] | null>(null);
 
   const handlePointerMove = (e: any) => {
@@ -129,6 +180,12 @@ const SceneContent: React.FC<ViewerProps> = ({ data, placementModeData, onPlaceM
       {data.objects.map((object) => (
         <Object3D key={object.id} object={object} />
       ))}
+
+      {/* Render agents */}
+      {agents && agentProfiles && agents.map((agent) => {
+        const profile = agentProfiles.find(p => p.id === agent.profileId);
+        return <Agent3D key={agent.id} agent={agent} profile={profile} />;
+      })}
 
       {/* Render the ghost model if in placement mode */}
       {placementModeData && pointerPosition && (
