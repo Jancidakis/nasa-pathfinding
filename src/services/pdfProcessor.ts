@@ -141,11 +141,15 @@ INSTRUCCIONES POR SECCIÓN:
       - NPT+0.00 = elevación 0
       - NPT+2.80 = elevación 2.80
 
-   c) Para CADA NIVEL, identifica TODAS las áreas/espacios:
+   c) Para CADA NIVEL, identifica TODAS las áreas/espacios CON SUS POSICIONES:
       - Nombres comunes: RECÁMARA, BAÑO, COCINA, SALA, COMEDOR, LAVANDERÍA,
         TERRAZA, VACÍO, ESCALERA, EXTERIOR, etc.
       - Las áreas suelen tener etiquetas en el plano
       - Busca superficies en m² cerca de cada área
+      - **CRÍTICO**: Detecta la posición aproximada (X, Z) de cada área en el plano
+      - Observa cómo están distribuidas las habitaciones (¿están lado a lado? ¿en forma de L? ¿cuadrado?)
+      - Ancho típico del plano en el PDF: ~10-20 metros
+      - Si hay dimensiones en el plano (3.200m, 9.600m, etc.), úsalas para calcular posiciones
 
    d) DETECTAR PUERTAS (CRÍTICO PARA PATHFINDING):
       - Busca símbolos de puertas en el plano (líneas curvas, rectángulos con apertura)
@@ -174,14 +178,28 @@ INSTRUCCIONES POR SECCIÓN:
         {
           "name": "RECÁMARA PRINCIPAL",
           "surface": 12.50,
-          "width": null,
-          "length": null,
-          "position": null,
+          "width": 3.5,
+          "length": 3.57,
+          "position": [5.0, 0.0],
           "doors": [
             {
               "width": 0.80,
               "position": null,
               "connectsTo": "SALA"
+            }
+          ]
+        },
+        {
+          "name": "BAÑO",
+          "surface": 4.0,
+          "width": 2.0,
+          "length": 2.0,
+          "position": [8.5, 0.0],
+          "doors": [
+            {
+              "width": 0.70,
+              "position": null,
+              "connectsTo": "RECÁMARA PRINCIPAL"
             }
           ]
         }

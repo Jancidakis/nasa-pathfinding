@@ -62,7 +62,7 @@ function estimateAreaDimensions(surface: number | null): { width: number; length
 
 /**
  * Genera posiciones para áreas en una planta
- * Las áreas deben estar conectadas (sin espacios entre ellas) para pathfinding
+ * Layout 2D inteligente: crea una distribución rectangular compacta
  */
 function generateAreaPositions(areas: Area[], levelIndex: number): Area[] {
   // Si las áreas tienen posiciones definidas, usarlas
@@ -77,16 +77,38 @@ function generateAreaPositions(areas: Area[], levelIndex: number): Area[] {
     });
   }
 
-  // Layout compacto: todas las áreas una al lado de la otra sin espacios
+  // Layout 2D: distribuir áreas en un patrón rectangular
+  // Calcular cuántas áreas por fila (aproximadamente cuadrado)
+  const areasPerRow = Math.ceil(Math.sqrt(areas.length));
+
   let currentX = 0;
+  let currentZ = 0;
+  let maxHeightInRow = 0;
+  let areasInCurrentRow = 0;
 
   return areas.map((area) => {
     const dimensions = area.width && area.length
       ? { width: area.width, length: area.length }
       : estimateAreaDimensions(area.surface);
 
-    const position: [number, number] = [currentX + dimensions.width / 2, 0];
+    // Si alcanzamos el límite de áreas por fila, pasar a la siguiente fila
+    if (areasInCurrentRow >= areasPerRow) {
+      currentX = 0;
+      currentZ += maxHeightInRow;
+      maxHeightInRow = 0;
+      areasInCurrentRow = 0;
+    }
+
+    // Posición del área (centrada en su espacio)
+    const position: [number, number] = [
+      currentX + dimensions.width / 2,
+      currentZ + dimensions.length / 2
+    ];
+
+    // Actualizar posición X para la siguiente área
     currentX += dimensions.width;
+    maxHeightInRow = Math.max(maxHeightInRow, dimensions.length);
+    areasInCurrentRow++;
 
     return {
       ...area,
