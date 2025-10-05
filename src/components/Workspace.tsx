@@ -12,6 +12,7 @@ export default function Workspace() {
   const { user, logout } = useAuth();
   const [currentStep, setCurrentStep] = useState<Step>('upload');
   const [sceneData, setSceneData] = useState<SceneData | null>(null);
+  const [buildingData, setBuildingData] = useState<BuildingData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,15 +30,18 @@ export default function Workspace() {
       const { processPDFWithGemini, validateBuildingData } = await import('../services/pdfProcessor');
 
       // Procesar el PDF con Gemini (valida altura y plantas primero)
-      const buildingData = await processPDFWithGemini(file);
+      const data = await processPDFWithGemini(file);
 
       // Validar la estructura de datos
-      if (!validateBuildingData(buildingData)) {
+      if (!validateBuildingData(data)) {
         throw new Error('Los datos extraídos del PDF no tienen el formato correcto');
       }
 
+      // Guardar los datos del edificio
+      setBuildingData(data);
+
       // Convertir a escena 3D
-      const scene = convertBuildingToScene(buildingData);
+      const scene = convertBuildingToScene(data);
       setSceneData(scene);
       setCurrentStep('visualization');
     } catch (err) {
@@ -65,8 +69,24 @@ export default function Workspace() {
 
   const handleBackToUpload = () => {
     setSceneData(null);
+    setBuildingData(null);
     setCurrentStep('upload');
     setError(null);
+  };
+
+  const handleDownloadJSON = () => {
+    if (!buildingData) return;
+
+    const dataStr = JSON.stringify(buildingData, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${buildingData.projectInfo.projectName || 'edificio'}-gemini.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -169,12 +189,20 @@ export default function Workspace() {
 
           {currentStep === 'visualization' && sceneData && (
             <div>
-              <button
-                onClick={handleBackToUpload}
-                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium py-2 px-4 rounded-lg transition-colors mb-4"
-              >
-                Cargar otro archivo
-              </button>
+              <div className="flex gap-4 mb-4">
+                <button
+                  onClick={handleBackToUpload}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  Cargar otro archivo
+                </button>
+                <button
+                  onClick={handleDownloadJSON}
+                  className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  📥 Descargar JSON (Gemini)
+                </button>
+              </div>
               <div className="h-[70vh] w-full bg-slate-100 rounded-lg overflow-hidden">
                 <Viewer data={sceneData} />
               </div>
