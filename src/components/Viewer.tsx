@@ -160,7 +160,12 @@ export const Viewer: React.FC<ViewerProps> = (props) => {
     <div style={{ width: '100%', height: '100%' }}>
       <Canvas
         dpr={[1, 2]}
-        camera={{ position: [30, 30, 30], fov: 50 }}
+        camera={{
+          position: [500, 500, 500],
+          fov: 50,
+          near: 0.1,
+          far: 50000 // Aumentar far plane para terrenos grandes
+        }}
         style={{ background: '#0f172a' }}
       >
         <SceneContent {...props} />

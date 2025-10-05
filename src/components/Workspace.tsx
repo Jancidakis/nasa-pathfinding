@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson, PlusSquare, X } from 'lucide-react';
+import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson, PlusSquare, X, Map } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import UploadStep from './steps/UploadStep';
 import { Viewer } from './Viewer';
@@ -7,6 +7,21 @@ import { SceneData, BuildingData, SceneObject } from '../types/building';
 import { convertBuildingToScene } from '../services/buildingConverter';
 import { db } from '../config/firebase';
 import { ref, set, push, onValue, remove } from 'firebase/database';
+
+// GeoJSON basic types for terrain
+export interface GeoJsonFeature {
+  type: 'Feature';
+  geometry: {
+    type: 'Polygon' | 'LineString';
+    coordinates: any;
+  };
+  properties: Record<string, any>;
+}
+
+export interface GeoJsonData {
+  type: 'FeatureCollection';
+  features: GeoJsonFeature[];
+}
 
 type Step = 'upload' | 'visualization';
 
@@ -22,11 +37,13 @@ export default function Workspace() {
   const [currentStep, setCurrentStep] = useState<Step>('upload');
   const [sceneData, setSceneData] = useState<SceneData>({ objects: [] });
   const [buildingData, setBuildingData] = useState<BuildingData | null>(null); // Represents the LAST loaded building
+  const [terrainData, setTerrainData] = useState<GeoJsonData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Ref for hidden file input
+  // Refs for hidden file inputs
   const jsonInputRef = useRef<HTMLInputElement>(null);
+  const svgInputRef = useRef<HTMLInputElement>(null);
 
   // State for placement mode
   const [placementModeData, setPlacementModeData] = useState<SceneData | null>(null);
@@ -44,6 +61,7 @@ export default function Workspace() {
   const clearScene = () => {
     setSceneData({ objects: [] });
     setBuildingData(null);
+    setTerrainData(null);
     setError(null);
   };
 
@@ -148,6 +166,128 @@ export default function Workspace() {
   };
 
   // --- Step 1 Handlers ---
+
+  const handleTerrainUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const svgText = await file.text();
+
+      // Crear SVG temporalmente en el DOM para que getBBox() funcione
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'absolute';
+      tempDiv.style.visibility = 'hidden';
+      tempDiv.innerHTML = svgText;
+      document.body.appendChild(tempDiv);
+
+      const svgElement = tempDiv.querySelector('svg');
+      if (!svgElement) {
+        document.body.removeChild(tempDiv);
+        throw new Error("No se encontró elemento SVG en el archivo.");
+      }
+
+      const features: GeoJsonFeature[] = [];
+
+      // Parser for polygon points attribute
+      const parsePoints = (pointsAttr: string) => {
+        return pointsAttr.split(' ').map(p => p.split(',').map(Number));
+      };
+
+      // Parser para path usando getBBox del navegador (más robusto)
+      const parsePathToBounds = (pathElement: SVGPathElement): number[][] | null => {
+        try {
+          // Obtener el bounding box del path
+          const bbox = pathElement.getBBox();
+
+          if (isNaN(bbox.x) || isNaN(bbox.y) || isNaN(bbox.width) || isNaN(bbox.height)) {
+            return null;
+          }
+
+          if (bbox.width === 0 || bbox.height === 0) {
+            return null; // Ignorar paths sin área
+          }
+
+          // Crear un rectángulo simplificado del path
+          return [
+            [bbox.x, bbox.y],
+            [bbox.x + bbox.width, bbox.y],
+            [bbox.x + bbox.width, bbox.y + bbox.height],
+            [bbox.x, bbox.y + bbox.height],
+            [bbox.x, bbox.y] // Cerrar
+          ];
+        } catch (err) {
+          console.warn('Error obteniendo bbox de path:', err);
+          return null;
+        }
+      };
+
+      // Parse polygon elements
+      svgElement.querySelectorAll('polygon').forEach((poly, i) => {
+        const points = parsePoints(poly.getAttribute('points') || '');
+        if (points.length > 0) {
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [points] },
+            properties: { id: `poly-${i}` }
+          });
+        }
+      });
+
+      // Parse polyline elements
+      svgElement.querySelectorAll('polyline').forEach((line, i) => {
+        const points = parsePoints(line.getAttribute('points') || '');
+        if (points.length > 0) {
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: points },
+            properties: { id: `line-${i}` }
+          });
+        }
+      });
+
+      // Parse path elements usando bounding box (más simple y robusto)
+      svgElement.querySelectorAll('path').forEach((path, i) => {
+        const coords = parsePathToBounds(path as SVGPathElement);
+        if (!coords) return;
+
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [coords] },
+          properties: { id: `path-${i}` }
+        });
+      });
+
+      // Limpiar el DOM
+      document.body.removeChild(tempDiv);
+
+      if (features.length === 0) {
+        throw new Error("No se encontraron elementos vectoriales (polygon, polyline, path) en el archivo SVG.");
+      }
+
+      const geoJsonData: GeoJsonData = { type: 'FeatureCollection', features };
+      setTerrainData(geoJsonData);
+
+      // Convertir terreno a objetos 3D y añadirlo a la escena
+      const { convertTerrainToScene } = await import('../services/terrainConverter');
+      const terrainScene = convertTerrainToScene(geoJsonData);
+
+      // Añadir terreno a la escena existente (o crear nueva escena)
+      setSceneData(prev => ({ objects: [...prev.objects, ...terrainScene.objects] }));
+      setCurrentStep('visualization');
+
+    } catch (err) {
+      console.error('Error processing SVG file:', err);
+      setError(err instanceof Error ? err.message : 'Error al procesar el archivo SVG.');
+    } finally {
+      setIsLoading(false);
+    }
+
+    event.target.value = '';
+  };
 
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
@@ -354,12 +494,19 @@ export default function Workspace() {
                     onChange={handleJsonUpload}
                     style={{ display: 'none' }}
                   />
+                  <input
+                    type="file"
+                    accept=".svg"
+                    ref={svgInputRef}
+                    onChange={handleTerrainUpload}
+                    style={{ display: 'none' }}
+                  />
                   {!showFileBrowser && (
                     <>
                       <UploadStep onFileUpload={handleFileUpload} />
                       <div className="mt-8 text-center border-t border-slate-200 pt-8">
                         <p className="text-slate-600 mb-4 text-sm">O continúa desde un archivo...</p>
-                        <div className="flex justify-center gap-4">
+                        <div className="flex justify-center gap-4 flex-wrap">
                           <button
                             onClick={() => setShowFileBrowser(true)}
                             className="inline-flex items-center gap-2 bg-green-100 hover:bg-green-200 text-green-800 font-medium py-2 px-6 rounded-lg transition-colors"
@@ -373,6 +520,13 @@ export default function Workspace() {
                           >
                             <FileJson size={18} />
                             ...desde un Archivo JSON
+                          </button>
+                          <button
+                            onClick={() => svgInputRef.current?.click()}
+                            className="inline-flex items-center gap-2 bg-amber-100 hover:bg-amber-200 text-amber-800 font-medium py-2 px-6 rounded-lg transition-colors"
+                          >
+                            <Map size={18} />
+                            Cargar Terreno (SVG)
                           </button>
                         </div>
                       </div>
