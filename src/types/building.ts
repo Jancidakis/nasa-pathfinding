@@ -12,6 +12,14 @@ export interface Door {
   width: number; // Ancho en metros
   position?: [number, number]; // Posición en el plano
   connectsTo?: string; // Nombre del área a la que conecta
+  isExit?: boolean; // true si conecta con el exterior (salida de emergencia)
+}
+
+export interface Stair {
+  name: string; // Nombre de la escalera
+  position: [number, number]; // Posición en el plano [x, z]
+  width?: number; // Ancho de la escalera
+  connectsToLevel?: string; // Nivel al que conecta
 }
 
 export interface Area {
@@ -29,6 +37,7 @@ export interface BuildingLevel {
   levelHeight?: number; // Height of this level in meters (default 3m)
   elevation?: number; // Elevation from ground level
   areas: Area[];
+  stairs?: Stair[]; // Escaleras en este nivel
 }
 
 export interface ElectricalComponent {
@@ -72,7 +81,7 @@ export interface SceneObject {
   type?: string; // Optional type identifier (e.g., 'door', 'wall', 'window')
   shape: 'box' | 'sphere' | 'cylinder';
   position: [number, number, number];
-  size: [number, number, number?];
+  size: [number, number, number?, number?]; // For cylinders: [radiusTop, radiusBottom, height, segments]
   color: string;
   label?: string; // Optional label for areas
 }

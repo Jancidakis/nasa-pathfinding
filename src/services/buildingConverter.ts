@@ -169,13 +169,17 @@ function convertLevel(level: BuildingLevel, levelIndex: number): SceneObject[] {
       });
     });
 
-    // Create door objects (green vertical rectangles)
+    // Create door objects (green for normal, red for exits)
     if (area.doors && area.doors.length > 0) {
       area.doors.forEach((door, doorIndex) => {
         // Default door dimensions
         const doorWidth = door.width || 0.8; // ancho de la puerta
         const doorHeight = 2.1; // altura estándar de puerta
         const doorThickness = 0.1; // grosor del marco
+
+        // Color: rojo para salidas, verde para puertas normales
+        const doorColor = door.isExit ? '#EF4444' : '#22c55e'; // Red for exits, Green for normal
+        const doorType = door.isExit ? 'exit' : 'door';
 
         // Si la puerta tiene posición específica, usarla; si no, colocarla en el borde del área
         let doorPosition: [number, number, number];
@@ -198,16 +202,55 @@ function convertLevel(level: BuildingLevel, levelIndex: number): SceneObject[] {
 
         objects.push({
           id: `level-${levelIndex}-area-${areaIndex}-door-${doorIndex}`,
-          type: 'door',
+          type: doorType,
           shape: 'box',
           position: doorPosition,
           size: [doorWidth, doorHeight, doorThickness],
-          color: '#22c55e', // Green
-          label: door.connectsTo ? `Puerta → ${door.connectsTo}` : 'Puerta',
+          color: doorColor,
+          label: door.isExit
+            ? `🚪 SALIDA ${door.connectsTo ? '→ ' + door.connectsTo : ''}`
+            : door.connectsTo ? `Puerta → ${door.connectsTo}` : 'Puerta',
         });
       });
     }
   });
+
+  // Create stair objects (blue cylinders with height connecting levels)
+  if (level.stairs && level.stairs.length > 0) {
+    level.stairs.forEach((stair, stairIndex) => {
+      const stairWidth = stair.width || 1.2; // ancho típico de escalera
+      const stairHeight = level.levelHeight || DEFAULT_LEVEL_HEIGHT; // altura hasta el siguiente nivel
+
+      objects.push({
+        id: `level-${levelIndex}-stair-${stairIndex}`,
+        type: 'stair',
+        shape: 'cylinder',
+        position: [
+          stair.position[0],
+          levelHeight + stairHeight / 2,
+          stair.position[1]
+        ],
+        size: [stairWidth / 2, stairHeight, stairWidth / 2, 32], // radio, altura, radio, segmentos
+        color: '#3B82F6', // Blue
+        label: `🪜 ${stair.name}${stair.connectsToLevel ? ' → ' + stair.connectsToLevel : ''}`,
+      });
+
+      // Marcador en la base de la escalera
+      objects.push({
+        id: `level-${levelIndex}-stair-${stairIndex}-base`,
+        type: 'stair-marker',
+        shape: 'cylinder',
+        position: [
+          stair.position[0],
+          levelHeight + 0.05,
+          stair.position[1]
+        ],
+        size: [stairWidth * 0.7, 0.1, stairWidth * 0.7, 32],
+        color: '#60A5FA', // Lighter blue
+        label: `Base ${stair.name}`,
+      });
+    });
+  }
 
   return objects;
 }

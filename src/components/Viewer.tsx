@@ -12,9 +12,10 @@ const Object3D = ({ object }: { object: SceneObject }) => {
   const [hovered, setHovered] = useState(false);
   const geometryArgs = object.size as any;
 
-  // Special rendering for doors: vertical green rectangles
-  const isDoor = object.type === 'door';
-  const doorColor = '#22c55e'; // Green color for doors
+  // Special rendering for doors and exits: vertical rectangles
+  const isDoor = object.type === 'door' || object.type === 'exit';
+  const isExit = object.type === 'exit';
+  const doorColor = isExit ? '#EF4444' : '#22c55e'; // Red for exits, Green for doors
   const doorWidth = 0.2; // Thin vertical plane
   const doorHeight = geometryArgs[1] || 2.5; // Height of door
   const doorLength = geometryArgs[0] || 1; // Width of door

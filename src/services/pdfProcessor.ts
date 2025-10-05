@@ -203,9 +203,16 @@ INSTRUCCIONES POR SECCIÓN:
       - Busca símbolos de puertas en el plano (líneas curvas, rectángulos con apertura)
       - Ancho típico de puertas: 0.70m, 0.80m, 0.90m, 1.00m
       - Identifica a qué áreas conecta cada puerta
+      - **CRÍTICO**: Marca si es puerta de salida (isExit: true) cuando conecta con EXTERIOR, CALLE, ACCESO PRINCIPAL
       - Si no se puede determinar el ancho, usa 0.80m como default
 
-   e) NO incluyas elementos estructurales como áreas (vigas, columnas, muros)
+   e) DETECTAR ESCALERAS (CRÍTICO PARA EVACUACIÓN):
+      - Busca símbolos de escaleras (líneas paralelas con flechas, indicadores de subida/bajada)
+      - Las escaleras conectan diferentes niveles
+      - Anota la posición de cada escalera
+      - Marca si está cerca de una salida al exterior
+
+   f) NO incluyas elementos estructurales como áreas (vigas, columnas, muros)
 
 3. FORMATO DE SALIDA:
 
@@ -233,7 +240,8 @@ INSTRUCCIONES POR SECCIÓN:
             {
               "width": 0.80,
               "position": null,
-              "connectsTo": "SALA"
+              "connectsTo": "SALA",
+              "isExit": false
             }
           ]
         },
@@ -247,9 +255,18 @@ INSTRUCCIONES POR SECCIÓN:
             {
               "width": 0.70,
               "position": null,
-              "connectsTo": "RECÁMARA PRINCIPAL"
+              "connectsTo": "RECÁMARA PRINCIPAL",
+              "isExit": false
             }
           ]
+        }
+      ],
+      "stairs": [
+        {
+          "name": "ESCALERA PRINCIPAL",
+          "position": [10.0, 5.0],
+          "width": 1.2,
+          "connectsToLevel": "Nivel 2"
         }
       ]
     }
