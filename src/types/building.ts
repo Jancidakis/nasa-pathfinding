@@ -69,6 +69,7 @@ export interface BuildingData {
 // 3D Scene representation (for Three.js rendering)
 export interface SceneObject {
   id: string;
+  type?: string; // Optional type identifier (e.g., 'door', 'wall', 'window')
   shape: 'box' | 'sphere' | 'cylinder';
   position: [number, number, number];
   size: [number, number, number?];

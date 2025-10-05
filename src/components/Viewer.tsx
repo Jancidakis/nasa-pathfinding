@@ -12,26 +12,41 @@ const Object3D = ({ object }: { object: SceneObject }) => {
   const [hovered, setHovered] = useState(false);
   const geometryArgs = object.size as any;
 
+  // Special rendering for doors: vertical green rectangles
+  const isDoor = object.type === 'door';
+  const doorColor = '#22c55e'; // Green color for doors
+  const doorWidth = 0.2; // Thin vertical plane
+  const doorHeight = geometryArgs[1] || 2.5; // Height of door
+  const doorLength = geometryArgs[0] || 1; // Width of door
+
   return (
     <group>
       <mesh
         position={object.position}
+        rotation={isDoor ? [0, 0, 0] : undefined}
         onPointerOver={() => setHovered(true)}
         onPointerOut={() => setHovered(false)}
       >
-        {object.shape === 'box' && <boxGeometry args={geometryArgs} />}
-        {object.shape === 'sphere' && (
-          <sphereGeometry args={[geometryArgs[0], geometryArgs[1] || 32, geometryArgs[2] || 16]} />
-        )}
-        {object.shape === 'cylinder' && (
-          <cylinderGeometry args={[geometryArgs[0], geometryArgs[1], geometryArgs[2], geometryArgs[3] || 32]} />
+        {isDoor ? (
+          // Vertical plane for doors
+          <boxGeometry args={[doorLength, doorHeight, doorWidth]} />
+        ) : (
+          <>
+            {object.shape === 'box' && <boxGeometry args={geometryArgs} />}
+            {object.shape === 'sphere' && (
+              <sphereGeometry args={[geometryArgs[0], geometryArgs[1] || 32, geometryArgs[2] || 16]} />
+            )}
+            {object.shape === 'cylinder' && (
+              <cylinderGeometry args={[geometryArgs[0], geometryArgs[1], geometryArgs[2], geometryArgs[3] || 32]} />
+            )}
+          </>
         )}
         <meshStandardMaterial
-          color={object.color}
+          color={isDoor ? doorColor : object.color}
           transparent
-          opacity={hovered ? 0.9 : 0.7}
-          emissive={hovered ? object.color : '#000000'}
-          emissiveIntensity={hovered ? 0.3 : 0}
+          opacity={hovered ? 0.95 : (isDoor ? 0.85 : 0.7)}
+          emissive={hovered ? (isDoor ? doorColor : object.color) : '#000000'}
+          emissiveIntensity={hovered ? 0.4 : (isDoor ? 0.2 : 0)}
         />
       </mesh>
 

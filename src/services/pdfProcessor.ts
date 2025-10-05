@@ -1,5 +1,12 @@
 import { BuildingData } from '../types/building';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Configurar worker de PDF.js desde node_modules
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 interface ValidationResult {
   totalFloors: number;
@@ -23,6 +30,42 @@ async function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * Convierte un PDF a imágenes PNG (una por página)
+ * Gemini analiza mejor imágenes que PDFs directos
+ */
+async function pdfToImages(file: File): Promise<string[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const images: string[] = [];
+
+  console.log(`📄 Convirtiendo ${pdf.numPages} páginas a imágenes...`);
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 2.0 }); // Escala 2x para mejor calidad
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({
+      canvasContext: context,
+      viewport: viewport,
+    }).promise;
+
+    // Convertir canvas a base64 (PNG)
+    const imageData = canvas.toDataURL('image/png');
+    const base64Image = imageData.split(',')[1];
+    images.push(base64Image);
+
+    console.log(`✅ Página ${pageNum}/${pdf.numPages} convertida`);
+  }
+
+  return images;
 }
 
 /**
@@ -52,9 +95,11 @@ export async function processPDFWithGemini(file: File): Promise<BuildingData> {
     console.log('📄 Procesando PDF:', file.name);
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
 
-    const base64Data = await fileToBase64(file);
+    // Convertir PDF a imágenes para mejor análisis
+    const images = await pdfToImages(file);
+    console.log(`🖼️ PDF convertido a ${images.length} imágenes`);
 
     // PASO 1: Validar estructura del edificio
     console.log('🔍 Paso 1: Validando altura y número de plantas...');
@@ -91,14 +136,17 @@ REGLAS ESTRICTAS:
 - Cuenta SOLO plantas habitables (no incluir cimentación o plafones)
 `;
 
+    // Preparar imágenes para enviar a Gemini
+    const imageParts = images.map(imageBase64 => ({
+      inlineData: {
+        data: imageBase64,
+        mimeType: 'image/png',
+      },
+    }));
+
     const validationResult = await model.generateContent([
       validationPrompt,
-      {
-        inlineData: {
-          data: base64Data,
-          mimeType: file.type,
-        },
-      },
+      ...imageParts,
     ]);
 
     const validationText = cleanJSON(validationResult.response.text());
@@ -134,7 +182,7 @@ INSTRUCCIONES POR SECCIÓN:
 
 2. BUILDING LEVELS (para cada nivel):
 
-   a) Identifica el nombre del nivel (ej: "Nivel 1", "Nivel 2", "Nivel Azotea")
+   a) Identifica el nombre del nivel (ej: "Nivel 1", "Nivel 2", "nivel 3" "Nivel Azotea")
 
    b) Extrae elevación del NPT:
       - Busca "NPT+X.XX" en las plantas
@@ -221,12 +269,7 @@ REGLAS CRÍTICAS:
 
     const detailResult = await model.generateContent([
       detailPrompt,
-      {
-        inlineData: {
-          data: base64Data,
-          mimeType: file.type,
-        },
-      },
+      ...imageParts,
     ]);
 
     const detailText = cleanJSON(detailResult.response.text());

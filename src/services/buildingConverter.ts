@@ -168,6 +168,45 @@ function convertLevel(level: BuildingLevel, levelIndex: number): SceneObject[] {
         color,
       });
     });
+
+    // Create door objects (green vertical rectangles)
+    if (area.doors && area.doors.length > 0) {
+      area.doors.forEach((door, doorIndex) => {
+        // Default door dimensions
+        const doorWidth = door.width || 0.8; // ancho de la puerta
+        const doorHeight = 2.1; // altura estándar de puerta
+        const doorThickness = 0.1; // grosor del marco
+
+        // Si la puerta tiene posición específica, usarla; si no, colocarla en el borde del área
+        let doorPosition: [number, number, number];
+
+        if (door.position) {
+          doorPosition = [
+            door.position[0],
+            levelHeight + doorHeight / 2,
+            door.position[1]
+          ];
+        } else {
+          // Colocar puertas en el borde del área (distribuidas uniformemente)
+          const edgeOffset = (doorIndex + 1) / (area.doors.length + 1);
+          doorPosition = [
+            position[0] + (dimensions.width / 2) * (edgeOffset * 2 - 1),
+            levelHeight + doorHeight / 2,
+            position[1] + dimensions.length / 2
+          ];
+        }
+
+        objects.push({
+          id: `level-${levelIndex}-area-${areaIndex}-door-${doorIndex}`,
+          type: 'door',
+          shape: 'box',
+          position: doorPosition,
+          size: [doorWidth, doorHeight, doorThickness],
+          color: '#22c55e', // Green
+          label: door.connectsTo ? `Puerta → ${door.connectsTo}` : 'Puerta',
+        });
+      });
+    }
   });
 
   return objects;
