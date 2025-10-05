@@ -1,12 +1,21 @@
-import { useState } from 'react';
-import { LogOut, Upload, Eye, TestTube } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { LogOut, Upload, Eye, TestTube, Save, FolderOpen, Trash2, FileJson } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import UploadStep from './steps/UploadStep';
 import { Viewer } from './Viewer';
 import { SceneData, BuildingData } from '../types/building';
 import { convertBuildingToScene } from '../services/buildingConverter';
+import { db } from '../config/firebase';
+import { ref, set, push, onValue, remove } from 'firebase/database';
 
 type Step = 'upload' | 'visualization';
+
+interface UserFile {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  buildingData: BuildingData;
+}
 
 export default function Workspace() {
   const { user, logout } = useAuth();
@@ -16,6 +25,89 @@ export default function Workspace() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Ref for hidden file input
+  const jsonInputRef = useRef<HTMLInputElement>(null);
+
+  // State for Firebase interaction
+  const [fileName, setFileName] = useState('');
+  const [userFiles, setUserFiles] = useState<UserFile[]>([]);
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+
+  // --- Firebase Logic ---
+
+  useEffect(() => {
+    if (!user) return;
+    const filesRef = ref(db, `userFiles/${user.uid}`);
+    const unsubscribe = onValue(filesRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const filesList = Object.keys(data).map(key => ({
+          id: key,
+          ...data[key]
+        })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setUserFiles(filesList);
+      } else {
+        setUserFiles([]);
+      }
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleSaveToFirebase = async () => {
+    if (!user || !buildingData) {
+      setError("No hay datos para guardar o no has iniciado sesión.");
+      return;
+    }
+    if (!fileName.trim()) {
+      setError("Por favor, dale un nombre al archivo.");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const userFilesRef = ref(db, `userFiles/${user.uid}`);
+      const newFileRef = push(userFilesRef);
+      await set(newFileRef, {
+        fileName: fileName.trim(),
+        buildingData: buildingData,
+        createdAt: new Date().toISOString(),
+      });
+      setFileName('');
+    } catch (err) {
+      console.error("Error guardando en Firebase:", err);
+      setError(err instanceof Error ? err.message : "No se pudo guardar el archivo.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLoadFromFirebase = (file: UserFile) => {
+    try {
+      setBuildingData(file.buildingData);
+      const scene = convertBuildingToScene(file.buildingData);
+      setSceneData(scene);
+      setCurrentStep('visualization');
+      setShowFileBrowser(false);
+      setError(null);
+    } catch (err) {
+      console.error("Error cargando archivo:", err);
+      setError("No se pudo cargar la escena desde este archivo.");
+    }
+  };
+
+  const handleDeleteFromFirebase = async (fileId: string) => {
+    if (!user) return;
+    if (!window.confirm("¿Estás seguro de que quieres borrar este archivo?")) return;
+    try {
+      const fileRef = ref(db, `userFiles/${user.uid}/${fileId}`);
+      await remove(fileRef);
+    } catch (err) {
+      console.error("Error borrando archivo:", err);
+      setError("No se pudo borrar el archivo.");
+    }
+  };
+
+  // --- Original & New Logic ---
+
   const steps = [
     { id: 'upload' as Step, label: 'Cargar', icon: Upload },
     { id: 'visualization' as Step, label: 'Visualizar', icon: Eye },
@@ -24,23 +116,14 @@ export default function Workspace() {
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
     setError(null);
-
+    setShowFileBrowser(false);
     try {
-      // Importar el procesador de PDF dinámicamente
       const { processPDFWithGemini, validateBuildingData } = await import('../services/pdfProcessor');
-
-      // Procesar el PDF con Gemini (valida altura y plantas primero)
       const data = await processPDFWithGemini(file);
-
-      // Validar la estructura de datos
       if (!validateBuildingData(data)) {
         throw new Error('Los datos extraídos del PDF no tienen el formato correcto');
       }
-
-      // Guardar los datos del edificio
       setBuildingData(data);
-
-      // Convertir a escena 3D
       const scene = convertBuildingToScene(data);
       setSceneData(scene);
       setCurrentStep('visualization');
@@ -52,10 +135,41 @@ export default function Workspace() {
     }
   };
 
-  // Function to test with sample data without uploading
-  const handleTestWithSample = async () => {
+  const handleJsonUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    setError(null);
+    setShowFileBrowser(false);
+
     try {
-      // Importar datos de ejemplo solo para testing
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      const { validateBuildingData } = await import('../services/pdfProcessor');
+      if (!validateBuildingData(data)) {
+        throw new Error('El archivo JSON no tiene el formato de BuildingData correcto.');
+      }
+
+      setBuildingData(data);
+      const scene = convertBuildingToScene(data);
+      setSceneData(scene);
+      setCurrentStep('visualization');
+    } catch (err) {
+      console.error('Error cargando archivo JSON:', err);
+      setError(err instanceof Error ? err.message : 'Error al cargar el archivo JSON.');
+    } finally {
+      setIsLoading(false);
+    }
+
+    // Reset file input
+    event.target.value = '';
+  };
+
+  const handleTestWithSample = async () => {
+    setShowFileBrowser(false);
+    try {
       const { createSampleBuildingData } = await import('../services/buildingConverter');
       const sampleData = createSampleBuildingData();
       const scene = convertBuildingToScene(sampleData);
@@ -72,11 +186,11 @@ export default function Workspace() {
     setBuildingData(null);
     setCurrentStep('upload');
     setError(null);
+    setShowFileBrowser(false);
   };
 
   const handleDownloadJSON = () => {
     if (!buildingData) return;
-
     const dataStr = JSON.stringify(buildingData, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(dataBlob);
@@ -89,18 +203,52 @@ export default function Workspace() {
     URL.revokeObjectURL(url);
   };
 
+  const FileBrowser = () => (
+    <div className="border-t border-slate-200 mt-8 pt-8">
+      <h3 className="text-lg font-medium text-slate-700 mb-4">Archivos Guardados</h3>
+      {userFiles.length > 0 ? (
+        <ul className="space-y-2 max-h-60 overflow-y-auto">
+          {userFiles.map(file => (
+            <li key={file.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+              <div>
+                <p className="font-medium text-slate-800">{file.fileName}</p>
+                <p className="text-xs text-slate-500">
+                  {new Date(file.createdAt).toLocaleString()}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleLoadFromFirebase(file)}
+                  className="p-2 text-slate-600 hover:text-blue-600 transition-colors"
+                  title="Cargar archivo"
+                >
+                  <FolderOpen size={18} />
+                </button>
+                <button
+                  onClick={() => handleDeleteFromFirebase(file.id)}
+                  className="p-2 text-slate-600 hover:text-red-600 transition-colors"
+                  title="Borrar archivo"
+                >
+                  <Trash2 size={18} />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-slate-500 text-center py-4">No tienes archivos guardados.</p>
+      )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <h1 className="text-xl font-light text-slate-800">Diseño Arquitectónico</h1>
-
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-600">{user?.email}</span>
-            <button
-              onClick={logout}
-              className="text-slate-600 hover:text-slate-800 transition-colors"
-            >
+            <button onClick={logout} className="text-slate-600 hover:text-slate-800 transition-colors">
               <LogOut size={20} />
             </button>
           </div>
@@ -164,19 +312,46 @@ export default function Workspace() {
                 </div>
               ) : (
                 <>
-                  <UploadStep onFileUpload={handleFileUpload} />
+                  <input
+                    type="file"
+                    accept=".json"
+                    ref={jsonInputRef}
+                    onChange={handleJsonUpload}
+                    style={{ display: 'none' }}
+                  />
+                  {!showFileBrowser && (
+                    <>
+                      <UploadStep onFileUpload={handleFileUpload} />
+                      <div className="mt-8 text-center border-t border-slate-200 pt-8">
+                        <p className="text-slate-600 mb-4 text-sm">O continúa desde un archivo...</p>
+                        <div className="flex justify-center gap-4">
+                          <button
+                            onClick={() => setShowFileBrowser(true)}
+                            className="inline-flex items-center gap-2 bg-green-100 hover:bg-green-200 text-green-800 font-medium py-2 px-6 rounded-lg transition-colors"
+                          >
+                            <FolderOpen size={18} />
+                            ...desde la Nube
+                          </button>
+                          <button
+                            onClick={() => jsonInputRef.current?.click()}
+                            className="inline-flex items-center gap-2 bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium py-2 px-6 rounded-lg transition-colors"
+                          >
+                            <FileJson size={18} />
+                            ...desde un Archivo JSON
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
 
-                  {/* Test button for sample data */}
-                  <div className="mt-8 text-center border-t border-slate-200 pt-8">
-                    <p className="text-slate-600 mb-4 text-sm">O prueba con datos de ejemplo</p>
-                    <button
-                      onClick={handleTestWithSample}
-                      className="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-medium py-2 px-6 rounded-lg transition-colors"
-                    >
-                      <TestTube size={18} />
-                      Visualizar ejemplo
-                    </button>
-                  </div>
+                  {showFileBrowser && (
+                    <>
+                      <button onClick={() => setShowFileBrowser(false)} className="text-sm text-slate-600 hover:text-slate-800 mb-4">
+                        &larr; Volver a cargar PDF
+                      </button>
+                      <FileBrowser />
+                    </>
+                  )}
                 </>
               )}
               {error && (
@@ -189,7 +364,7 @@ export default function Workspace() {
 
           {currentStep === 'visualization' && sceneData && (
             <div>
-              <div className="flex gap-4 mb-4">
+              <div className="flex flex-wrap gap-4 mb-4 items-center">
                 <button
                   onClick={handleBackToUpload}
                   className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium py-2 px-4 rounded-lg transition-colors"
@@ -200,8 +375,26 @@ export default function Workspace() {
                   onClick={handleDownloadJSON}
                   className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                 >
-                  📥 Descargar JSON (Gemini)
+                  📥 Descargar JSON
                 </button>
+                <div className="flex-grow"></div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={fileName}
+                    onChange={(e) => setFileName(e.target.value)}
+                    placeholder="Nombre del archivo..."
+                    className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                  <button
+                    onClick={handleSaveToFirebase}
+                    disabled={isLoading}
+                    className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-green-300"
+                  >
+                    <Save size={18} />
+                    {isLoading ? 'Guardando...' : 'Guardar en Nube'}
+                  </button>
+                </div>
               </div>
               <div className="h-[70vh] w-full bg-slate-100 rounded-lg overflow-hidden">
                 <Viewer data={sceneData} />
